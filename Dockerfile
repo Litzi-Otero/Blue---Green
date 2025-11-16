@@ -7,7 +7,7 @@ FROM node:18-alpine AS build
 # Establece directorio de trabajo
 WORKDIR /app
 
-# Copia package.json y package-lock.json (si existe)
+# Copia package*.json
 COPY package*.json ./
 
 # Instala dependencias (incluye dev para build)
