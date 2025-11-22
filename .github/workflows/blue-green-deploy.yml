@@ -1,0 +1,71 @@
+name: Blue-Green Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main, v2]  # Trigger en main (Blue) o v2 (Green + switch)
+
+env:
+  SERVICE_NAME: ${{ secrets.SERVICE_NAME }}  # blue-green-app
+  REGION: ${{ secrets.GCP_REGION }}  # us-central1
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}  # blue-green-react
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker to use gcloud as credential helper
+      run: |  # Autentica Docker para build
+        gcloud auth configure-docker --quiet
+
+    - name: Determine version and revision action
+      id: version
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "version=v1" >> $GITHUB_OUTPUT
+          echo "action=deploy-blue" >> $GITHUB_OUTPUT
+        else
+          echo "version=v2" >> $GITHUB_OUTPUT
+          echo "action=deploy-green-switch" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build and push Docker image
+      run: |
+        docker build --build-arg VERSION=$$ {{ steps.version.outputs.version }} -t gcr.io/ $${{ env.PROJECT_ID }}/$$ {{ env.SERVICE_NAME }}: $${{ steps.version.outputs.version }} .
+        docker push gcr.io/$$ {{ env.PROJECT_ID }}/ $${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}
+
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy ${{ env.SERVICE_NAME }} \
+          --image gcr.io/$$ {{ env.PROJECT_ID }}/ $${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }} \
+          --platform managed \
+          --region ${{ env.REGION }} \
+          --allow-unauthenticated \
+          --port 8080 \
+          --set-env-vars VERSION=${{ steps.version.outputs.version }}
+
+    - name: Switch traffic if Green (v2)
+      if: steps.version.outputs.action == 'deploy-green-switch'
+      run: |
+        # Obtiene ID de la nueva revisión (última)
+        REVISION_ID=$$ (gcloud run revisions list --service= $${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --limit=1 --format="value(metadata.name)")
+        echo "Nueva revisión: $REVISION_ID"
+        # Switch 100% tráfico a v2
+        gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+          --to-revisions $REVISION_ID=100 \
+          --region ${{ env.REGION }}
+        echo "Switch completado: Tráfico 100% en v2 (Green)!"
+
+    - name: Notify on success
+      run: |
+        echo "Deploy y switch exitosos! URL: https://$$ {{ env.SERVICE_NAME }}- $${{ env.REGION }}.run.app"
