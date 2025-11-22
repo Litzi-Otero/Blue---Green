@@ -25,8 +25,7 @@ jobs:
       uses: google-github-actions/setup-gcloud@v2
 
     - name: Configure Docker to use gcloud as credential helper
-      run: |  # Autentica Docker para build
-        gcloud auth configure-docker --quiet
+      run: gcloud auth configure-docker --quiet
 
     - name: Determine version and revision action
       id: version
@@ -41,13 +40,14 @@ jobs:
 
     - name: Build and push Docker image
       run: |
-        docker build --build-arg VERSION=$$ {{ steps.version.outputs.version }} -t gcr.io/ $${{ env.PROJECT_ID }}/$$ {{ env.SERVICE_NAME }}: $${{ steps.version.outputs.version }} .
-        docker push gcr.io/$$ {{ env.PROJECT_ID }}/ $${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}
+        TAG="gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}"
+        docker build --build-arg VERSION=${{ steps.version.outputs.version }} -t "$TAG" .
+        docker push "$TAG"
 
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy ${{ env.SERVICE_NAME }} \
-          --image gcr.io/$$ {{ env.PROJECT_ID }}/ $${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }} \
+          --image "gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}" \
           --platform managed \
           --region ${{ env.REGION }} \
           --allow-unauthenticated \
@@ -58,14 +58,13 @@ jobs:
       if: steps.version.outputs.action == 'deploy-green-switch'
       run: |
         # Obtiene ID de la nueva revisión (última)
-        REVISION_ID=$$ (gcloud run revisions list --service= $${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --limit=1 --format="value(metadata.name)")
+        REVISION_ID=$(gcloud run revisions list --service=${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --limit=1 --format="value(metadata.name)")
         echo "Nueva revisión: $REVISION_ID"
         # Switch 100% tráfico a v2
         gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
-          --to-revisions $REVISION_ID=100 \
+          --to-revisions "$REVISION_ID=100" \
           --region ${{ env.REGION }}
-        echo "Switch completado: Tráfico 100% en v2 (Green)!"
+        echo "Switch completado: Tráfico 100% en v2 (Green)! URL: https://${{ env.SERVICE_NAME }}-${{ env.REGION }}.run.app"
 
     - name: Notify on success
-      run: |
-        echo "Deploy y switch exitosos! URL: https://$$ {{ env.SERVICE_NAME }}- $${{ env.REGION }}.run.app"
+      run: echo "Deploy exitoso! Versión: ${{ steps.version.outputs.version }}"
